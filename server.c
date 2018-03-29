@@ -4,6 +4,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include<netinet/in.h>
+#include <arpa/inet.h>
+
 #define ERR_EXIT(m)\
 		{perror(m);\
 		exit(1);\
@@ -35,6 +37,7 @@ int main(){
 	if((conn=accept(listenfd,(struct sockaddr*)&peeraddr,&peerlen))<0){
 		ERR_EXIT("accept");
 	}
+	printf("ip=%s,port=%d\n",inet_ntoa(peeraddr.sin_addr),ntohs(peeraddr.sin_port));
 	char recevbuf[1024];
 	memset(recevbuf,0,sizeof(recevbuf));
 	while(1){
