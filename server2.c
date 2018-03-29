@@ -14,12 +14,18 @@
 
 void do_service(int conn){
 	      char recevbuf[1024];
-	      memset(recevbuf,0,sizeof(recevbuf));
 	      while(1){
+	       memset(recevbuf,0,sizeof(recevbuf));
 		   int ret=read(conn,recevbuf,sizeof(recevbuf));
+		   if(ret==0){
+		   		printf("client close\n");
+				break;
+		   }
+		   else if(ret==-1){
+		   	ERR_EXIT("read");
+		   }
 		   fputs(recevbuf,stdout);
 		   write(conn,recevbuf,ret);
-	       memset(recevbuf,0,sizeof(recevbuf));
 	      }
 }
 
@@ -64,12 +70,12 @@ int main(){
 		  close(listenfd);
 		  do_service(conn);
 		  close(conn);
+		  exit(0);
 		}
 		else {
 			close(conn);
 		}
 	}
-	close(listenfd);
 	return 0;	
 
 }
