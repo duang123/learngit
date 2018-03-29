@@ -25,6 +25,10 @@ int main(){
 //	severaddr.sin_addr.s_addr_t=inet_addr("58.198.84.205");
     severaddr.sin_addr.s_addr=htonl(INADDR_ANY);
 	//inet_aton("127.0.0.1",&severaddr.sin_addr.s_addr);
+	int on=1;
+	if((setsockopt(listenfd,SOL_SOCKET,SO_REUSEADDR,&on,sizeof(on)))<0){
+		ERR_EXIT("setsockopt");
+	}//设置地址重复利用
 	if(bind(listenfd,(struct sockaddr*)&severaddr,sizeof(severaddr))<0){
 		ERR_EXIT("bind");
 	}
