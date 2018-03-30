@@ -4,11 +4,17 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include<netinet/in.h>
+#include<signal.h>
+
 #define ERR_EXIT(m)\
 		{perror(m);\
 		exit(1);\
 		}
 
+void handler(int sig){
+	printf("get a sig=%d\n",sig);
+	exit(0);
+}
 
 int main(){
 
@@ -42,12 +48,16 @@ int main(){
 			}
 			else if(ret==0){
 				printf("server close\n");
+				break;
 			}
-			else
 				fputs(recevbuf,stdout);
 		}
+		close(sock);
+		kill(getppid(),SIGUSR1);
+		exit(0);
 	}
 	else { 
+		signal(SIGUSR1,handler);
 		char sendbuf[1024]={0}; 
 		while(fgets(sendbuf,sizeof(sendbuf),stdin)!=NULL){
 			write(sock,sendbuf,strlen(sendbuf));
@@ -55,7 +65,6 @@ int main(){
 		}
 	
 	}
-    char recevbuf[1024]={0};
 	close(sock);
 	return 0;	
 

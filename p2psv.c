@@ -11,12 +11,12 @@
 		{perror(m);\
 		exit(1);\
 		}
-/*
-void handler(int p){
-	printf("client close\n");
-	break;
+
+void handler(int sig){
+	printf("receive a signal=%d\n",sig);
+	exit(0);
 }
-*/
+
 int main(){
 
 	int listenfd;
@@ -54,12 +54,13 @@ int main(){
 		ERR_EXIT("fork");
 	}
 	else if(pid==0){
-		//signal(SIGUSR1,handler);
+		signal(SIGUSR1,handler);
 		char sendbuf[1024]={0};
 		while(fgets(sendbuf,sizeof(sendbuf),stdin)!=NULL){
 			int ret=write(conn,sendbuf,sizeof(sendbuf));
 			memset(sendbuf,0,sizeof(sendbuf));
 		}
+		printf("child close\n");
 		exit(0);
 	}
 	else {//父进程负责接受收据 
@@ -77,7 +78,8 @@ int main(){
 			fputs(recevbuf,stdout);
 		}
 		close(conn);
-		//kill(pid,SIGUSR1);
+		printf("parent close\n");
+		kill(pid,SIGUSR1);
 		ERR_EXIT(0);
 	}
 	return 0;	
