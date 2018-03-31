@@ -10,6 +10,12 @@
 		{perror(m);\
 		exit(1);\
 		}
+
+struct packet{
+	int len;
+	char buf[1024];
+};
+
 ssize_t writen(int fd, const void *buf, size_t count){
 	char* bufp=(char*)buf;
 	size_t nleft=count;
@@ -59,14 +65,37 @@ int main(){
 	if((connect(sock,(struct sockaddr*)&severaddr,sizeof(severaddr)))<0){
 		ERR_EXIT("accept");
 	}
-    char recevbuf[1024]={0};
-	char sendbuf[1024]={0};
-	while(fgets(sendbuf,sizeof(sendbuf),stdin)!=NULL){
-		writen(sock,sendbuf,sizeof(sendbuf));
-		readn(sock,recevbuf,sizeof(recevbuf));
-		fputs(recevbuf,stdout);
-		memset(sendbuf,0,sizeof(sendbuf));
-		memset(recevbuf,0,sizeof(recevbuf));
+
+	struct packet recevbuf;
+	struct packet sendbuf;
+	memset(&sendbuf,0,sizeof(sendbuf));
+	memset(&recevbuf,0,sizeof(recevbuf));
+	int n;
+	while(fgets(sendbuf.buf,sizeof(sendbuf.buf),stdin)!=NULL){
+		n=strlen(sendbuf.buf);
+		sendbuf.len=htonl(n);
+		writen(sock,&sendbuf,n+4);
+
+		int ret=readn(sock,&recevbuf.len,4);
+		if(ret==-1){
+			ERR_EXIT("readn");
+		}
+		else if(ret<4){
+			printf("server close\n");
+			break;
+		}
+		n=ntohl(recevbuf.len);
+		ret=readn(sock,recevbuf.buf,n);
+		if(ret==-1){
+			ERR_EXIT("readn");
+		}
+		else if(ret<n){
+			printf("server close\n");
+			break;
+		}
+		fputs(&recevbuf.buf,stdout);
+		memset(&sendbuf,0,sizeof(sendbuf));
+		memset(&recevbuf,0,sizeof(recevbuf));
 	}
 	close(sock);
 	return 0;	

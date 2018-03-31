@@ -13,6 +13,12 @@
 		{perror(m);\
 		exit(1);\
 		}
+
+struct packet{
+	int len;
+	char buf[1024];
+};
+
 ssize_t readn(int fd, void *buf, size_t count){
 	char* bufp=(char*)buf;
 	ssize_t nread;
@@ -49,19 +55,29 @@ ssize_t writen(int fd, const void *buf, size_t count){
 }
 
 void do_service(int conn){
-	      char recevbuf[1024];
-	      while(1){
-	       memset(recevbuf,0,sizeof(recevbuf));
-		   int ret=readn(conn,recevbuf,sizeof(recevbuf));
-		   if(ret==0){
+	   struct packet recevbuf;
+		int n;
+		while(1){
+	       memset(&recevbuf,0,sizeof(recevbuf));
+		   int ret=readn(conn,&recevbuf.len,4);
+		   if(ret==-1){
+		   	ERR_EXIT("readn");
+		   }
+		   else if(ret<4){
 		   		printf("client close\n");
 				break;
 		   }
-		   else if(ret==-1){
-		   	ERR_EXIT("read");
+		   n=ntohl(recevbuf.len);
+		   ret=readn(conn,recevbuf.buf,n);
+		   if(ret==-1){
+		   	ERR_EXIT("readn");
 		   }
-		   fputs(recevbuf,stdout);
-		   writen(conn,recevbuf,ret);
+		   else if(ret<0){
+		   	printf("client close\n");
+			break;
+		   }
+		   fputs(recevbuf.buf,stdout);
+		   writen(conn,&recevbuf,4+n);
 	      }
 }
 
