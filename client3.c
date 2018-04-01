@@ -93,7 +93,7 @@ int main(){
 			printf("server close\n");
 			break;
 		}
-		fputs(&recevbuf.buf,stdout);
+		fputs(recevbuf.buf,stdout);
 		memset(&sendbuf,0,sizeof(sendbuf));
 		memset(&recevbuf,0,sizeof(recevbuf));
 	}

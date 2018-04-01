@@ -72,7 +72,7 @@ void do_service(int conn){
 		   if(ret==-1){
 		   	ERR_EXIT("readn");
 		   }
-		   else if(ret<0){
+		   else if(ret<n){
 		   	printf("client close\n");
 			break;
 		   }
