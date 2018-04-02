@@ -1,0 +1,12 @@
+查看网络状态：   netstate -an | grep tcp | grep 5188
+                 其中5188是端口号
+
+查看进程状态：   ps -ef | grep echosrv
+                 其中echosrv是进程名
+设置非阻塞I/O：	    fcntl(fd,F_SETFL,flag|NONBLOCK)
+非阻塞I/O又叫做忙等待，效率低，不推荐使用。
+
+用select来管理多个I/O，一旦其中一个I/O或者多个I/O检测到我们感兴趣的事件，
+select函数返回，返回值为检测到的事件个数。并且返回哪些I/O发生了事件，遍历
+这些事件，进而处理事件.
+
