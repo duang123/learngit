@@ -1,4 +1,5 @@
 #include<string.h>
+#include<stdlib.h>
 #include<stdio.h>
 #include <sys/types.h>          /* See NOTES */
 #include <sys/socket.h>
@@ -101,7 +102,14 @@ int main(){
 	if((connect(sock,(struct sockaddr*)&severaddr,sizeof(severaddr)))<0){
 		ERR_EXIT("accept");
 	}
-
+/*	
+	struct sockaddr_in localaddr;
+	socklen_t localaddr_len=sizeof(localaddr);
+	if(getsockname(sock,(struct sockaddr*)&localaddr,&localaddr_len)<0){
+		ERR_EXIT("getsockname");
+	}
+	printf("local ip=%s,port=%d\n",inet_ntoa(localaddr.sin_addr),ntohs(localaddr.sin_port));
+*/
 	char recevbuf[1024]={0};
 	char sendbuf[1024]={0};
 	memset(sendbuf,0,sizeof(sendbuf));
