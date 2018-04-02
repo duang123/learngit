@@ -111,30 +111,35 @@ void echo_clt(int sock){
 
 }
 int main(){
+   
+	int sock[5];
+	int i;
+	for(i=0;i<5;++i)
+	{
+		if((sock=socket(AF_INET,SOCK_STREAM,0))<0){
+			ERR_EXIT("socket");
+		}
 
-	int sock;
-	if((sock=socket(AF_INET,SOCK_STREAM,0))<0){
-		ERR_EXIT("socket");
-	}
-
-	struct sockaddr_in severaddr;
-	severaddr.sin_family=AF_INET;
-	severaddr.sin_port=5656;
-	severaddr.sin_addr.s_addr=inet_addr("58.198.84.205");
-//    severaddr.sin_addr.s_addr=htonl(INADDR_ANY);
-	//inet_aton("127.0.0.1",&severaddr.sin_addr.s_addr);
-	if((connect(sock,(struct sockaddr*)&severaddr,sizeof(severaddr)))<0){
-		ERR_EXIT("accept");
-	}
+		struct sockaddr_in severaddr;
+		severaddr.sin_family=AF_INET;
+		severaddr.sin_port=5656;
+		severaddr.sin_addr.s_addr=inet_addr("58.198.84.205");
+	//    severaddr.sin_addr.s_addr=htonl(INADDR_ANY);
+		//inet_aton("127.0.0.1",&severaddr.sin_addr.s_addr);
+		if((connect(sock,(struct sockaddr*)&severaddr,sizeof(severaddr)))<0)		{	
+			ERR_EXIT("accept");
+		}
 	
-	struct sockaddr_in localaddr;
-	socklen_t localaddr_len=sizeof(localaddr);
-	if(getsockname(sock,(struct sockaddr*)&localaddr,&localaddr_len)<0){
-		ERR_EXIT("getsockname");
-	}
-	printf("local ip=%s,port=%d\n",inet_ntoa(localaddr.sin_addr),ntohs(localaddr.sin_port));
-	echo_cli(sock);	//客户端与服务器通信细节使用echo_clt函数封装
-	close(sock);
+		struct sockaddr_in localaddr;
+		socklen_t localaddr_len=sizeof(localaddr);
+		if(getsockname(sock,(struct sockaddr*)&localaddr,&localaddr_len)<0){
+			ERR_EXIT("getsockname");
+		}
+		printf("local ip=%s,port=%d\n",inet_ntoa(localaddr.sin_addr),ntohs(localaddr.sin_port));
+
+		}
+	echo_cli(sock[0]);	//客户端与服务器通信细节使用echo_clt函数封装
+	close(sock[0]);
 	return 0;	
 
 }
