@@ -113,16 +113,22 @@ void echo_clt(int sock){
 	int fd_stdin=fileno(stdin);
 	int maxfds=(fd_stdin>sock? fd_stdin: sock)+1;
 	FD_ZERO(&readset);
+	int stdineof=0;
 	while(1){	
 		FD_SET(sock,&readset);
-		FD_SET(fd_stdin,&readset);
+		if(stdineof==0)
+			FD_SET(fd_stdin,&readset);
 		int nfds=select(maxfds,&readset,NULL,NULL,NULL);
 		if(nfds<0){
 			ERR_EXIT("select");
 		}
 		else if(nfds==0){continue;}
 		if(FD_ISSET(fd_stdin,&readset)){
-			fgets(sendbuf,sizeof(sendbuf),stdin);
+			if(fgets(sendbuf,sizeof(sendbuf),stdin)==NULL){ //ctrl+d表示输入eof
+			//	close(sock);
+				shutdown(sock,SHUT_WR);
+				stdineof=1;
+			}
 			n=strlen(sendbuf);			
 			writen(sock,sendbuf,n);
 			memset(sendbuf,0,sizeof(sendbuf));

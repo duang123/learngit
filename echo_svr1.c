@@ -118,14 +118,21 @@ void echo_sv(int conn){
 	      }
 }
 
-void handler(int p){
+void handler_sigchld(int p){
 	while(waitpid(-1,NULL,WNOHANG)>0){
 		;				//查看正在运行的进程列表 ps -ef | grep echo_sv
 	}
 }
+
+void handler_sigpipe(int sig){
+	printf("receive a sig=%d\n",sig);
+	exit(1);
+}
+
 int main(){
+	signal(SIGPIPE,handler_sigpipe);
 //	signal(SIGCHLD,SIG_ING);
-	signal(SIGCHLD,handler);	
+	signal(SIGCHLD,handler_sigchld);	
 	int listenfd;
 	if((listenfd=socket(AF_INET,SOCK_STREAM,0))<0){
 		ERR_EXIT("socket");
@@ -228,8 +235,10 @@ int main(){
 		   			printf("client close\n");
 					FD_CLR(conn,&allset);
 					conn_arr[j]=-1;
+					close(conn);
 				}
 		   		fputs(recevbuf,stdout);
+				sleep(5);
 		   		writen(conn,recevbuf,strlen(recevbuf));
 				if(--nfds<=0)break;
 				
