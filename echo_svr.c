@@ -10,6 +10,8 @@
 #include<errno.h>
 #include<string.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define ERR_EXIT(m)\
 		{perror(m);\
@@ -115,8 +117,14 @@ void echo_sv(int conn){
 	      }
 }
 
+void handler(int p){
+	while(waitpid(-1,NULL,WNOHANG)>0){
+		;				//查看正在运行的进程列表 ps -ef | grep echo_sv
+	}
+}
 int main(){
-	signal(SIGCHLD,SIG_ING);
+//	signal(SIGCHLD,SIG_ING);
+	signal(SIGCHLD,handler);	
 	int listenfd;
 	if((listenfd=socket(AF_INET,SOCK_STREAM,0))<0){
 		ERR_EXIT("socket");
