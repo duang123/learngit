@@ -10,3 +10,8 @@
 select函数返回，返回值为检测到的事件个数。并且返回哪些I/O发生了事件，遍历
 这些事件，进而处理事件.
 
+套接子I/O超时设置方法:
+  select实现超时：read_timeout函数封装
+  				  write_timeout函数封装
+				  accept-timeout函数封装
+				  connect-timeout函数封装
