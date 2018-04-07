@@ -84,3 +84,19 @@ gdb调试：
 10.设置追踪变量： display
 	取消追踪变量： undisplay 编号(info display获取编号)
 11.退出gdb调试：q
+
+makefile的编写：
+1.规则：三要素：目标，依赖，命令
+		目标：依赖条件
+			命令
+makefile中的模式规则：
+%.o:%.c
+	gcc -c $< -o $@
+makefile中的自动变量：
+	$<:规则中的第一个依赖
+	$@:规则中的目标
+	$^:规则中的所有依赖
+只能在规则的命令中使用
+makefile中的函数的使用：
+          src=$(wildcard ./*.c)  //获取指定目录下的.c文件
+		  obj=$(patsubst ./%.c,./%.o,$(src) ) //匹配替换 
