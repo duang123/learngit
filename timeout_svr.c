@@ -40,8 +40,8 @@ int main(){
 	 if(ret==-1){
 	 	ERR_EXIT("listen");
 	 }
-
-	 ret=accept(listenfd,&cliaddr,10);
+	socklen_t len=sizeof(cliaddr);
+	 ret=accept(connfd,(struct sockaddr*)&cliaddr,&len);
 	 if(ret==-1){
 	 	ERR_EXIT("accept_timeout");
 	 }

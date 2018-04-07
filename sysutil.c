@@ -7,6 +7,8 @@
 #include<stdlib.h>
 #include<errno.h>
 #include<netinet/in.h>
+
+//#define DEBUG
 #define ERR_EXIT(m)\
 		{\
 			perror(m);\
@@ -133,6 +135,9 @@ int connect_timeout(int fd,struct sockaddr_in* addr,unsigned int wait_seconds){
 	int ret;
 	ret=connect(fd,(struct sockaddr*)addr,sizeof(struct sockaddr_in));
 	if(ret==-1 && errno==EINPROGRESS){
+#ifdef DEBUG
+		printf("AAA\n");
+#endif
 		fd_set connect_set;
 		struct timeval timeout;
 		FD_ZERO(&connect_set);
@@ -152,6 +157,9 @@ int connect_timeout(int fd,struct sockaddr_in* addr,unsigned int wait_seconds){
 			return -1;
 		else if(ret==1)
 		{
+#ifdef DEBUG
+			printf("BBB\n");
+#endif
 			int err;
 			socklen_t socklen=sizeof(err);
 			int sockoptret=getsockopt(fd,SOL_SOCKET,SO_ERROR,&err,&socklen);
@@ -163,6 +171,9 @@ int connect_timeout(int fd,struct sockaddr_in* addr,unsigned int wait_seconds){
 				ret=0;
 			}else
 			{
+#ifdef DEBUG
+				printf("CCC\n");
+#endif
 				errno=err;
 				ret=-1;
 			}
