@@ -100,3 +100,7 @@ makefile中的自动变量：
 makefile中的函数的使用：
           src=$(wildcard ./*.c)  //获取指定目录下的.c文件
 		  obj=$(patsubst ./%.c,./%.o,$(src) ) //匹配替换 
+
+select的限制：
+	1. 一个进程能打开的最大文件描述符限制。这可通过调整内核参数实现(ulimit -n+数字 或者函数 setrlimit)
+	2.select中的fd_set集合容量的限制(FD_SETSIZE),这需要重新编译内核
