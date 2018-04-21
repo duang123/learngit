@@ -3,7 +3,7 @@
 #include <arpa/inet.h>
 #include<stdio.h>
 #include<string.h>
-
+//简单的收发消息
 int main(){
 
 	in_addr_t addr1=inet_addr("192.2.2.0");
