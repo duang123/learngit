@@ -38,6 +38,7 @@ int main()
 	socklen_t len;
 	struct sockaddr_in cliaddr,servaddr;
 	int on=1;
+
 	listenfd=socket(AF_INET,SOCK_STREAM,0);
 	if(listenfd==-1)
 		ERR_EXIT("socket");
