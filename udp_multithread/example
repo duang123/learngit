@@ -1,0 +1,1002 @@
+#include<sys/types.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include<sys/wait.h>
+#include <string.h>
+
+#include <sys/select.h> // for select 
+#include <time.h>
+
+#include<pthread.h> // 开多线程用
+
+
+
+#define UDP_PAKEAGE_LEN 1500
+
+
+
+struct share_info
+{
+	int keepdo;
+	int udpdo;
+	int tcpdo;
+};//此处没有加锁，可能有问题
+
+struct share_info main_info = {1,1,1};//退程序用
+
+//*************************************************************************//
+struct UDP_DATA
+{
+	struct UDP_DATA *next;
+	char   *data;
+	int    datalen;
+	int    maxlen; // 一般用不到 防止初始化没有赋值没有拷入数据时，以后再用
+	int    isread;
+
+};
+
+struct UDP_DATA_HEAD
+{
+	struct UDP_DATA *next;
+	struct UDP_DATA *last;
+	int sum_datelen;
+
+	int temp_max_datelen; // 记录生成的数据总量的最大值 实时更新 测试用
+	int temp_num_block; //记录测试产生的最多的节点数
+	int rec_speed;
+
+	unsigned int history_byte;
+	unsigned int history_package;
+
+	struct sockaddr_in their_addr;
+	int fd_udp;
+
+	int enprintf;
+
+	
+	int enable_check;//包检测 使能
+	unsigned int begin_num; //测试丢包率使用 //包检测用 包标号头
+	unsigned int end_num; //测试丢包率使用//包标号尾	
+	char b_num[10];//字符串版本 收 4字节 32位包标号
+	char e_num[10];
+	unsigned int count_package;//包计数，检测
+	int ratio_throw;//丢包率  实际是收包率
+
+};
+
+
+struct UDP_DATA_HEAD *new_head()
+{
+	struct UDP_DATA_HEAD *head ;
+	head = (struct UDP_DATA_HEAD *)malloc(sizeof(struct UDP_DATA_HEAD));
+	if(head ==NULL)
+		return NULL;
+	head->last=NULL;
+	head->next=NULL;
+	head->sum_datelen = 0;
+	head->temp_max_datelen = 0;
+	head->temp_num_block = 0;
+	head->rec_speed=0;
+	head->history_byte = 0;
+	head->history_package = 0;
+	head->enprintf = 1;
+
+	head->begin_num = 0; 
+	head->end_num =   0; 
+	head->enable_check = 0;
+	head->count_package= 0;
+	head->ratio_throw = 0;
+	head->fd_udp = 0;
+};
+
+struct UDP_DATA *new_ublock(char *buff,int requstlen)  // 如果buff 为null 只申请 requstlen长度的内存空间 不对其赋值//生成一个udp数据节点并且初始化节点（从buff拷入数据） 如果失败返回空
+{
+	struct UDP_DATA *newblock ;
+	
+	newblock= (struct UDP_DATA *)malloc(sizeof(struct UDP_DATA));
+	if(newblock == NULL)
+		return NULL;
+
+	newblock->data = (char *)malloc(requstlen * (sizeof(char)));
+	if(newblock->data == NULL)
+		return NULL;
+	if(buff == NULL)
+	{
+		newblock->data[0] = '\0';
+		newblock->datalen = 0;
+		newblock->maxlen = requstlen;
+	}
+	else
+	{
+		memcpy(newblock->data,buff,requstlen);
+		newblock->datalen=requstlen;
+		newblock->maxlen=requstlen;
+	}
+	newblock->isread = 0;
+	newblock->next = NULL;
+	return newblock;
+}
+
+void free_firstublock(struct UDP_DATA_HEAD *head)
+{
+	
+	struct UDP_DATA *oldblock = head->next;
+	if(oldblock == NULL)
+		return;
+
+	if(head->last == head->next || oldblock->next == NULL) /// 保留队尾元素防止出现原子性问题，需要用锁解决
+		return;
+
+	head->next = oldblock->next;
+
+	free(oldblock->data);
+	free(oldblock);
+}
+
+int get_firstblock(struct UDP_DATA_HEAD *head,char *buff,int len)
+{
+	
+	int copylen = len;
+	if(head ==NULL)
+		return -1;
+	if(head->next == NULL)
+		return -1;
+	if(head->next->isread)
+		return 0;
+
+	if(copylen > head->next->datalen)
+		copylen = head->next->datalen;
+
+	memcpy(buff,head->next->data,copylen);
+
+	head->next->isread = 1;
+	return copylen;
+}
+
+void insert_newblock(struct UDP_DATA_HEAD *head,struct UDP_DATA *block)
+{
+	if(head == NULL)
+	{
+		printf("no head be insert\n");
+		return;
+	}
+	if(head->next == NULL || head->last ==NULL)
+	{
+		head->last = block; //顺序不能颠倒 先队尾 再队头
+		head->next = block; //完成此步后 主线程脱管 节点交给副线程		
+	}
+	else
+	{
+		head->last->next=block;
+		head->last = block;	
+	}
+}
+
+void refresh_checkpackage(struct UDP_DATA_HEAD *head)
+{
+	unsigned int Order_b,Order_e;
+
+	if(head->enable_check == 0)
+		return;
+
+	Order_b = (int)head->b_num[0]*16777216 + (int)head->b_num[1]*65536 +(int)head->b_num[2]*256 + (int)head->b_num[3];
+	Order_e = (int)head->e_num[0]*16777216 + (int)head->e_num[1]*65536 +(int)head->e_num[2]*256 + (int)head->e_num[3];
+
+	head->begin_num =Order_b;
+	head->end_num =Order_e;
+
+	if(head->count_package && Order_e != Order_b)
+	{
+		head->ratio_throw =head->count_package*100 / (Order_e - Order_b + 1);
+	}
+	else
+	{
+		head->ratio_throw = -1;
+	}
+	
+}
+
+void refresh_udatainfo(struct UDP_DATA_HEAD *head) //刷新 队头中的实时数据
+{
+	head->sum_datelen = 0;
+	head->temp_num_block = 0;
+	struct UDP_DATA *temp_block=head->next;
+	while (temp_block)
+	{
+		head->sum_datelen +=temp_block->datalen;
+		head->temp_num_block+= 1;
+		temp_block = temp_block->next;
+	}
+	if(head->sum_datelen>head->temp_max_datelen)
+		head->temp_max_datelen = head->sum_datelen;
+
+	refresh_checkpackage(head);
+}
+
+void reset_udp_history(struct UDP_DATA_HEAD *head) //重置测试数据
+{
+	int i;
+	head->history_byte=0;
+	head->history_package=0;
+
+	head->count_package = 0;
+	printf("RESET HISTORY \n");
+
+	memset(head->b_num,'0', 9);
+	memset(head->e_num,'0', 9);
+	//head->b_num = str;
+	//head->e_num = str;
+	head->begin_num = 0;
+	head->end_num   = 0;
+	head->ratio_throw = 0;
+}
+
+void update_packageorder(struct UDP_DATA_HEAD *head,char *buff) //更新包标号仅仅更新字符版本
+{
+	if(head->enable_check == 0)
+		return ;
+	if(head->count_package == 0)
+	{
+		memcpy(head->b_num,buff,9);
+		memcpy(head->e_num,buff,9);
+		head->count_package += 1;
+	}
+	else
+	{
+		memcpy(head->e_num,buff,9);
+		head->count_package += 1;
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+
+
+int GET_CMD(char *buff,int len)
+{
+	char CMD_check = *buff;
+	if(len<2)
+		return 0;
+	if(CMD_check != '/')
+		return 0;
+	else
+	{
+		char CMD_name = *(buff+1);
+		switch (CMD_name)
+		{
+		case 'x':
+		case 'X':
+			return 1; //exit
+		case 't':
+		case 'T':
+			return 2;//clear TSL
+		case 'R':
+		case 'r':
+			return 3;//rselect
+		case 's':
+		case 'S':
+			return 4;
+		default:
+			break;
+		}
+
+	}
+	return 0;
+	
+}
+
+
+int SET_RC_SIZE(int fd,int n) // SET rec buff
+{
+	int snd_size = 0; 
+	int rcv_size = 0;
+	 socklen_t optlen;
+
+	optlen = sizeof(rcv_size);
+	int err = getsockopt(fd, SOL_SOCKET, SO_SNDBUF,&rcv_size, &optlen); 
+	if(err<0){ 
+		printf("err\n"); 
+	}    
+	printf("RCV_SIZE: %d Byte\n",rcv_size); 
+
+	rcv_size = n*1024; // default 16  set 64
+	err = setsockopt(fd,SOL_SOCKET,SO_RCVBUF, (char *)&rcv_size, optlen); 
+	if(err<0){ 
+		printf("err\n"); 
+	}    
+	printf("RCV_SIZE SET: %d Byte\n",rcv_size);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+void *UDP_PREAD(void *arg)
+{
+	struct UDP_DATA_HEAD *head = (struct UDP_DATA_HEAD *)arg;
+
+	struct timeval select_time={0,1000};
+	time_t seconds,now;
+	int maxfd = 2;
+	fd_set readset;
+	fd_set writeset;
+	FD_ZERO(&readset);
+	FD_ZERO(&writeset);
+
+	printf("CHECK UDP_PREAD\n");
+
+	seconds =time((time_t *)NULL);	
+	unsigned int TST = 0;
+
+	char readbuff[UDP_PAKEAGE_LEN];
+	struct UDP_DATA tempblock ;
+	int readlen=0;
+	char senddata[60];
+	
+	char interval_buff[30];
+	interval_buff[0] = (char)0x55;
+	interval_buff[1] = (char)0x0b;
+	interval_buff[2] = (char)0x00;
+	interval_buff[3] = (char)0x01;
+	interval_buff[4] = (char)0x00;
+	interval_buff[5] = (char)0x00;
+	interval_buff[6] = (char)0x00;
+	interval_buff[7] = (char)0x00;
+	interval_buff[8] = (char)0x00;
+	interval_buff[9] = (char)0xab;
+	interval_buff[10] = (char)0x00;
+	interval_buff[11] = (char)0x04;
+	interval_buff[12] = (char)0x00;
+	interval_buff[13] = (char)0x00;
+
+	interval_buff[14] = (char)0x4e;
+	interval_buff[15] = (char)0x20;
+
+	interval_buff[16] = (char)0x4e;//20000
+	interval_buff[17] = (char)0x20;
+
+	interval_buff[18] = (char)0x27;//10000
+	interval_buff[19] = (char)0x10;
+
+	interval_buff[20] = (char)0x13;//5000
+	interval_buff[21] = (char)0x88;
+
+	interval_buff[22] = (char)0x07;//2000
+	interval_buff[23] = (char)0xd0;
+
+	interval_buff[24] = (char)0x03;//1000
+	interval_buff[25] = (char)0xe8;
+	int interval_level = 1;
+
+	int time_leve[5] = {20000,10000,5000,2000,1000};
+
+	while (main_info.udpdo && main_info.keepdo)
+	{
+		FD_ZERO(&readset);
+		FD_ZERO(&writeset);
+		FD_SET(0,&readset);
+		FD_SET(0,&writeset);
+
+		now = time((time_t *)NULL);
+		
+		int getlen;
+		int datalen;
+
+		if(head->next)
+		{
+			
+			getlen = get_firstblock(head,readbuff,2000);
+			if(getlen>=0)
+			{
+				readlen+=getlen;
+				free_firstublock(head);
+			}				
+			else
+			{
+				printf("get block error \n");
+				main_info.udpdo = 0;
+				break;
+			}
+		}
+
+
+		switch(select(maxfd,&readset,&writeset,NULL,&select_time)) 
+		{
+		case -1: main_info.udpdo = 0;break; 
+		case  0: break;
+		default: 
+			if(FD_ISSET(0,&readset))
+			{
+				datalen=read(0,senddata,20);
+				senddata[datalen] = '\0';
+				int cmdid = GET_CMD(senddata,datalen);
+				if(cmdid == 1)
+				{
+					main_info.udpdo=0;
+					break;
+				}
+				if(cmdid == 2)
+				{
+					reset_udp_history(head);
+					readlen = 0;
+				}
+				if(cmdid == 3)
+				{
+					if(head->enable_check)
+					{
+						printf("CHECK CLOSE \n");
+						head->enable_check = 0;
+					}
+					else
+					{
+						printf("CHECK OPEN \n");
+						head->enable_check = 1;
+					}
+					
+				}
+				if(cmdid == 4)
+				{
+					if(head->fd_udp == 0)
+					{
+						printf("NO FD TO SEND \n");
+						break;
+					}
+
+					if(interval_level == 5) 
+						interval_level = 1; 
+					else
+						interval_level++;
+
+					interval_buff[14] = interval_buff[14+interval_level*2];
+					interval_buff[15] = interval_buff[15+interval_level*2];
+
+
+					int addrlen = sizeof(head->their_addr);
+					int sendlen = sendto(head->fd_udp, interval_buff, 16, 0, (struct sockaddr *)&head->their_addr, sizeof(head->their_addr));
+					if(sendlen<0)
+					{
+						perror("send");
+						close(head->fd_udp);
+						main_info.udpdo = 0;
+						break;
+					}
+
+					printf("change interval to %d \n",time_leve[interval_level-1]);
+				}
+			}		
+	
+			if(FD_ISSET(0,&writeset))
+			{
+				if(now > seconds)
+				{
+					refresh_udatainfo(head);
+					
+					seconds = now;
+					if(head->enable_check == 0)
+						printf("Get msg from %s UDP_RecvRate = %d.%d MB/s \nHistory byte = %d   ||  History package = %d\nNOW_SUM = %d ,readlen = %d   \n\n",inet_ntoa(head->their_addr.sin_addr),head->rec_speed/1000000,head->rec_speed%1000000,head->history_byte,head->history_package,head->sum_datelen,readlen);
+					else
+					{
+						printf("UDP_RecvRate = %d.%d MB/s,Orders Begin  %d  To  %d, Package_count = %d,throw_package = %d ,GET_ratio = %d%%\n\n",head->rec_speed/1000000,head->rec_speed%1000000,head->begin_num,head->end_num,head->count_package,(head->end_num-head->begin_num +1)-head->count_package,head->ratio_throw);
+					}
+				}
+			}
+		}
+	}
+
+	printf("check pread out \n");
+}
+void UDP_PREC(int port)
+{
+	int sockudp;
+	struct sockaddr_in my_addr; 
+	struct sockaddr_in their_addr;
+	unsigned int sin_size;
+	time_t seconds,now;
+
+
+	//设定延时
+	struct timeval select_time={1,0};
+	int maxfd = 2;
+	fd_set readset; //依然使用非阻塞结构，防止退出程序时候卡死
+	FD_ZERO(&readset);
+
+
+	pthread_t th; // 开一个独立线程去转移数据，主函数只用来监控端口和接收udp包
+	int ret;
+
+	struct UDP_DATA_HEAD *head = new_head();
+
+	ret = pthread_create( &th, NULL, UDP_PREAD, head );  
+	if(ret != 0)
+	{
+		printf("pthread fail \n");
+		exit(1);
+	}
+	printf("pth successful \n");
+
+	pthread_detach(th);
+
+	if(head == NULL)
+		printf("FAILED TO CREAT DATA HEAD  \n");
+	printf("CREATE DATA HEAD SUCCESSFULLY \n");
+
+	if ((sockudp = socket(AF_INET, SOCK_DGRAM, 0)) == -1) { 
+		perror("sockudp"); 
+		exit(1); 
+	} 
+	printf("PUDP SOCKET ok \n");
+
+
+	SET_RC_SIZE(sockudp,128);//#############################################
+
+	memset(&my_addr,0,sizeof(my_addr));
+	my_addr.sin_family=AF_INET; 
+	my_addr.sin_port=htons(port); 
+	my_addr.sin_addr.s_addr = INADDR_ANY; 
+
+
+	if (bind(sockudp, (struct sockaddr *)&my_addr, sizeof(struct sockaddr)) == -1 ) { 
+		perror("UDP bind"); 
+		exit(1); 
+	} 
+	printf("UDP bind ok \n");
+
+	seconds =time((time_t *)NULL);
+	maxfd = sockudp+1;
+	head->fd_udp = sockudp;
+	char urec_buff[2000];
+	int copylen=0;
+	struct UDP_DATA *temp_block;
+	int speed=0;
+
+	while(main_info.udpdo && main_info.keepdo) 
+	{
+		int   datalen=0;	
+		int addrlen =sizeof(their_addr);
+
+		FD_ZERO(&readset);
+		FD_SET(sockudp,&readset);
+
+		now =time((time_t *)NULL);
+		if(now>seconds)
+		{			
+			seconds =now;
+			head->rec_speed = speed;
+			speed = 0;
+		}
+
+
+		switch(select(maxfd,&readset,NULL,NULL,&select_time)) 
+		{
+		case -1: main_info.udpdo = 0;break; 
+		case  0: break;
+		default: 
+
+			if(FD_ISSET(sockudp,&readset))
+			{
+				copylen=recvfrom(sockudp, urec_buff, UDP_PAKEAGE_LEN, 0, (struct sockaddr *)&head->their_addr,&addrlen);
+				if(copylen<0)
+				{
+					copylen=0;
+					perror("recv");
+					close(sockudp);
+					main_info.udpdo = 0;
+					break;
+				}
+				else
+				{
+					speed +=copylen;
+					head->history_byte +=copylen;
+					head->history_package+=1;
+
+					temp_block = new_ublock(urec_buff,copylen);
+					if(temp_block == NULL)
+					{
+						printf("Fail to create new block \n");
+						main_info.udpdo = 0;
+						break;
+					}
+
+					insert_newblock(head,temp_block);
+					update_packageorder(head,urec_buff);
+
+				}				
+			}
+		}
+	}
+	printf("PUDP OUT THEN \n");
+}
+
+
+
+int TCP_MOD(unsigned int port,unsigned limit)
+{
+   int sockfd,new_fd;
+   struct sockaddr_in my_addr; 
+   struct sockaddr_in their_addr;
+   unsigned int sin_size, myport, lisnum; 
+
+   time_t seconds,now;
+
+
+   struct timeval select_time={0,1000}; //for select
+   int maxfd=-1;
+
+   fd_set readset;
+   fd_set writeset;
+   fd_set exceptset;
+
+   FD_ZERO(&readset);
+   FD_ZERO(&writeset);
+   FD_ZERO(&exceptset);
+
+   myport = port; 
+   lisnum = limit; 
+
+   if ((sockfd = socket(PF_INET, SOCK_STREAM, 0)) == -1) { 
+	   perror("socket"); 
+	   exit(1); 
+   } 
+    printf("socket %d ok \n",myport);
+
+
+	SET_RC_SIZE(sockfd,64);
+
+
+	my_addr.sin_family=PF_INET; 
+	my_addr.sin_port=htons(myport); 
+	my_addr.sin_addr.s_addr = INADDR_ANY; 
+	bzero(&(my_addr.sin_zero), 0); 
+	if (bind(sockfd, (struct sockaddr *)&my_addr, sizeof(struct sockaddr)) == -1) { 
+		perror("bind"); 
+		exit(1); 
+	} 
+	printf("bind ok \n");
+
+	if (listen(sockfd, lisnum) == -1) { 
+		perror("listen"); 
+		exit(1); 
+	}
+	printf("listen ok \n");
+
+	sin_size = sizeof(struct sockaddr_in); 
+	char getdata[20];  
+	int getlen;
+	while(1)
+	{
+		FD_ZERO(&readset);
+		FD_SET(0,&readset);
+		FD_SET(sockfd,&readset);
+
+		select(sockfd+1,&readset,NULL,NULL,&select_time);
+
+		if(FD_ISSET(0,&readset))
+		{
+			getlen=read(0,getdata,20);
+			getdata[getlen] = '\0';
+			if(GET_CMD(getdata,getlen) == 1)
+				exit(0);
+			printf("Get CMD \n");
+		}
+		if(FD_ISSET(sockfd,&readset))
+		{
+			new_fd =accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+			if(new_fd == -1)
+			{   
+				perror("accept"); 
+				exit(0);
+			}
+			else
+				break;
+		}   
+	}  
+	printf("server: got connection from %s\n",inet_ntoa(their_addr.sin_addr));
+
+	maxfd=new_fd+1;
+
+	int   step = 0;
+	char rec_buff[3000];
+	char send_buff[500];
+	send_buff[0]='\0';
+	int sent_time=0;
+	seconds = time((time_t *)NULL);
+	int rec_byte = 0;
+
+	int dowhile=1;
+	char  senddata[21];
+	int   datalen=0;
+
+
+	while(dowhile)
+	{
+		char  szSnd[63] = {0};
+		
+
+		FD_ZERO(&readset);
+		FD_ZERO(&writeset);
+		FD_ZERO(&exceptset);
+
+		FD_SET(new_fd,&readset); 
+		FD_SET(new_fd,&writeset);  
+		FD_SET(new_fd,&exceptset);
+
+		FD_SET(0,&readset);
+		FD_SET(0,&writeset);
+
+		now = time((time_t *)NULL);
+
+		switch(select(maxfd,&readset,&writeset,&exceptset,&select_time)) 
+		{
+		case -1: perror("SELECT:"); dowhile=0; break; 
+		case  0: break;
+		default: 
+			if(FD_ISSET(new_fd,&exceptset))
+			{
+				perror("Except error:");
+				close(new_fd);
+				dowhile=0;
+				break;
+			}
+			if(FD_ISSET(0,&readset))
+			{
+				datalen=read(0,senddata,20);
+				senddata[datalen] = '\0';
+				if(GET_CMD(senddata,datalen) == 1)
+				{
+					dowhile=0;
+					break;
+				}
+			}
+			if(FD_ISSET(new_fd,&writeset))
+			{
+				if(now > seconds)
+				{
+
+					sprintf(szSnd,"i am server [%d] : %s\n",step,senddata);
+
+					step++;
+					if (send(new_fd, szSnd, strlen(szSnd), 0) == -1) 
+					{ 
+						perror("send"); 
+						close(new_fd); 
+						break;
+					}
+					senddata[0] = '\0';
+
+				}
+
+			}
+			if(FD_ISSET(new_fd,&readset))
+			{
+				int copylen=0;
+				copylen = recv(new_fd,rec_buff,2048,0);
+				if(copylen <= 0)
+				{
+					perror("recv");
+					close(new_fd);
+					dowhile=0;
+					break;
+				}
+				else
+				{
+					rec_byte+= copylen;
+					rec_buff[copylen] = '\0';
+				}
+			}
+			if(FD_ISSET(0,&writeset))
+			{
+				if(now > seconds)
+				{
+					seconds = now;
+					if(rec_byte/1000 < 10000 )
+						printf("send msg: %sRecvRate = %d KB/s\n\n",szSnd,rec_byte/1000);
+					else
+						printf("send msg: %sRecvRate = %d MB/s\n\n",szSnd,rec_byte/1000000); 
+					rec_byte = 0;
+				}
+			}
+
+
+		}
+	}
+	printf("THEN OUT MOD\n");
+	return 0;
+
+}
+/********************************************************************* 
+**********************************************************************/
+int UDP_MOD(unsigned int port)
+{
+	int sockudp;
+	struct sockaddr_in my_addr; 
+	struct sockaddr_in their_addr;
+	unsigned int sin_size;
+
+	fd_set readset;
+	fd_set writeset;
+	fd_set exceptset;
+
+	FD_ZERO(&readset);
+	FD_ZERO(&writeset);
+	FD_ZERO(&exceptset);
+
+	
+	time_t seconds,now;
+	struct timeval select_time={0,1000};
+
+	if ((sockudp = socket(AF_INET, SOCK_DGRAM, 0)) == -1) { 
+		perror("sockudp"); 
+		exit(1); 
+	} 
+	printf("UDP SOCKET ok \n");
+
+
+	SET_RC_SIZE(sockudp,1024);//#############################################
+
+
+	memset(&my_addr,0,sizeof(my_addr));
+	my_addr.sin_family=AF_INET; 
+	my_addr.sin_port=htons(port); 
+	my_addr.sin_addr.s_addr = INADDR_ANY; 
+
+	if (bind(sockudp, (struct sockaddr *)&my_addr, sizeof(struct sockaddr)) == -1 ) { 
+		perror("UDP bind"); 
+		exit(1); 
+	} 
+	printf("UDP bind ok \n");
+
+	int maxfd = sockudp + 1;
+	int  step = 0;
+
+	char send_buff[50] = "HOLLE I AM UDP SEVER !\n";
+	char udprec_buff[16384];
+	
+	
+	seconds = time((time_t *)NULL);
+	int  udpreclen;
+	int  copylen=0;
+	int  out=1;
+	int udpable=0;
+	unsigned int TST=0;
+	int ONE_RECLNE=2048;
+	while(out) 
+	{
+		char  szSnd[63] = {0};
+		char  senddata[21];
+		int   datalen=0;
+
+		FD_ZERO(&readset);
+		FD_ZERO(&writeset);
+		FD_ZERO(&exceptset);
+
+		FD_SET(0,&readset);
+		FD_SET(0,&writeset);
+
+		FD_SET(sockudp,&readset);
+		FD_SET(sockudp,&writeset); 
+
+		now = time((time_t *)NULL);
+
+		switch(select(maxfd,&readset,&writeset,&exceptset,&select_time)) 
+		{
+		case -1: out=0;break; 
+		case  0: break;
+		default: 
+			if(FD_ISSET(0,&readset))
+			{
+				datalen=read(0,senddata,20);
+				senddata[datalen] = '\0';
+				if(GET_CMD(senddata,datalen) == 1)
+				{
+					out=0;
+					break;
+				}
+				if(GET_CMD(senddata,datalen) == 2)
+				{
+					TST=0;					
+				}
+				if(GET_CMD(senddata,datalen) == 3)
+				{
+					ONE_RECLNE = ONE_RECLNE*2;
+					if( ONE_RECLNE > 16384)
+						ONE_RECLNE = 2048;
+				}
+			}		
+			if(FD_ISSET(sockudp,&readset))
+			{
+				int addrlen =sizeof(their_addr);
+				copylen=recvfrom(sockudp, udprec_buff, ONE_RECLNE, 0, (struct sockaddr *)&their_addr,&addrlen);
+				if(copylen<0)
+				{
+					copylen=0;
+					perror("recv");
+					close(sockudp);
+					out=0;
+					break;
+				}
+				else
+					{
+						udpreclen += copylen;
+						TST+= copylen;
+						udprec_buff[copylen]='\0';
+						udpable = 1;
+					}
+			} 
+			if(FD_ISSET(sockudp,&writeset))
+			{
+				if(now > seconds && udpable)
+				{
+					int addrlen =sizeof(their_addr);
+					copylen=sendto(sockudp, send_buff, strlen(send_buff), 0, (struct sockaddr *)&their_addr, sizeof(their_addr));
+					if(copylen<0)
+					{
+						copylen=0;
+						perror("send");
+						close(sockudp);
+						out=0;
+						break;
+					}
+				}
+			}
+			if(FD_ISSET(0,&writeset))
+			{
+				if(now > seconds)
+				{
+					seconds = now;
+					printf("Get msg: %.5s from %s UDP_RecvRate = %d.%d MB/s \nTST = %d     ,   ONE_RECLNE = %d   \n\n",udprec_buff,inet_ntoa(their_addr.sin_addr),udpreclen/1000000,udpreclen%1000000,TST,ONE_RECLNE);					
+					udpreclen = 0;
+				}
+			}
+		}
+	}
+	printf("UDP OUT THEN \n");
+}
+
+/********************************************************************* 
+*filename: tcpserver.c 
+*purpose:tcp服务端程序 
+********************************************************************/
+int main(int argc, char ** argv) 
+{ 
+    int type;
+	int port;
+	if(argv[1])
+		type =atoi(argv[1]); 
+	else type=0;
+		
+
+	if(type<1)
+	{
+		if(argv[2])
+			port =atoi(argv[2]); 
+		else port=8808;
+
+		printf("******TCP SEVER TPYE******\n");//单线程 TCP包
+		TCP_MOD(port,2);
+	}
+	
+	else if(type <2)
+	{
+		if(argv[2])
+			port =atoi(argv[2]); 
+		else port=4400;
+
+		printf("******UDP SEVER TPYE******\n");//单线程 udp 包
+		UDP_MOD(port);
+	}
+	else
+	{
+		if(argv[2])
+			port =atoi(argv[2]); 
+		else port=6600;
+
+		printf("******PUDP SEVER TPYE******\n");//多线程 udp 包
+		UDP_PREC(port);
+	}
+	
+	main_info.keepdo = 0;
+	exit(0); 
+
+}
