@@ -28,6 +28,8 @@ void str_cli(FILE* fp_arg,int sock_arg,struct sockaddr* servaddr,socklen_t servl
         sendto(sockfd,recvline,strlen(recvline),0,servaddr,sizeof(struct sockaddr));
 	memset(recvline,0,sizeof(recvline));
         recvfrom(sockfd,recvline,1024,0,&serv,&len);
+	fputs(recvline,stdout);
+	printf("\n");
         //serv=servaddr;
         pthread_create(&tid,NULL,copyto,&serv);
         memset(recvline,0,sizeof(recvline));
