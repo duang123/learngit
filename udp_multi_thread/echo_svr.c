@@ -21,11 +21,15 @@ void str_echo(int sockfd,struct sockaddr_in cliaddr)
 	ssize_t n;
 	socklen_t len=sizeof(cliaddr);
 	char buf[1024]="i am here";
-		sendto(sockfd,buf,strlen(buf),0,(struct sockaddr*)&cliaddr,sizeof(cliaddr));
+	n=sendto(sockfd,buf,strlen(buf),0,(struct sockaddr*)&cliaddr,sizeof(cliaddr));
+	if(n==-1)
+		ERR_EXIT("sendto");
+	printf("send to client\n");
 	memset(buf,0,sizeof(buf));
 	while(1)
 	{
 		n=recvfrom(sockfd,buf,1024,0,(struct sockaddr*)&cliaddr,&len);
+		sendto(sockfd,buf,1024,0,(struct sockaddr*)&cliaddr,sizeof(cliaddr));
 		memset(buf,0,sizeof(buf));
 	}
 }
